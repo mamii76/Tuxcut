@@ -1,0 +1,12 @@
+# TuxCut-NG Python dependencies
+# Install: pip install -r requirements.txt --break-system-packages
+
+# Server
+scapy>=2.5.0
+bottle>=0.12.25
+apscheduler>=3.10.4
+setproctitle>=1.3.3
+
+# Client
+PyQt6>=6.6.0
+requests>=2.31.0
