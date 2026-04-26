@@ -1,6 +1,0 @@
-scapy
-bottle
-apscheduler
-setproctitle
-PyQt6
-requests
