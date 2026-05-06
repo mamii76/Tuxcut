@@ -14,9 +14,9 @@ modern distributions.
 | Hostname lookup | nslookup | **socket** (no dependency) |
 | Gateway info | netifaces | **ip route** (no dependency) |
 | Python | 3.6–3.12 | **3.11–3.14** |
-| Fedora 43 | ❌ | ✅ |
-| Debian 12 | partial | ✅ |
-| Ubuntu 22/24 | partial | ✅ |
+| Fedora 44 | ❌ | ✅ |
+| Debian 13 | partial | ✅ |
+| Ubuntu 22/26 | partial | ✅ |
 
 ---
 
@@ -61,14 +61,14 @@ sudo python3 server/tuxcutd.py
 python3 client/tuxcut.py
 ```
 
-### Fedora 43
+### Fedora 44
 
 ```bash
 sudo dnf install python3-PyQt6 nftables net-tools libpcap
 pip install scapy bottle apscheduler setproctitle requests --break-system-packages
 ```
 
-### Debian 12 / Ubuntu 24
+### Debian 13 / Ubuntu 26
 
 ```bash
 sudo apt install python3-pyqt6 nftables net-tools libpcap-dev
