@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/27565519/README.md)
 # TuxCut-NG
 
 ![Version](https://img.shields.io/badge/version-1.3.1-blue)
