@@ -1,4 +1,4 @@
-# TuxCut-NG
+ TuxCut-NG
 
 ![Version](https://img.shields.io/badge/version-1.3.1-blue)
 ![Python](https://img.shields.io/badge/python-3.11--3.14-green)
