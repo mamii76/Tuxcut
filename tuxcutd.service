@@ -1,0 +1,13 @@
+[Unit]
+Description=TuxCut-NG ARP daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/tuxcut-ng/server/tuxcutd.py
+Restart=on-failure
+RestartSec=3
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target
