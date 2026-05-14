@@ -8,9 +8,10 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 
-SERVER      = 'http://127.0.0.1:8013'
-APP_DIR     = os.path.join(str(Path.home()), '.tuxcut')
+SERVER       = 'http://127.0.0.1:8013'
+APP_DIR      = os.path.join(str(Path.home()), '.tuxcut')
 ALIASES_FILE = os.path.join(APP_DIR, 'aliases.json')
+CONFIG_FILE  = os.path.join(APP_DIR, 'config.json')
 Path(APP_DIR).mkdir(exist_ok=True)
 
 logging.basicConfig(level=logging.INFO)
@@ -29,11 +30,21 @@ def save_aliases(d):
     with open(ALIASES_FILE, 'w', encoding='utf-8') as f:
         json.dump(d, f, ensure_ascii=False)
 
-# ── SVG Icons (مدمجة — لا ملفات خارجية) ──────────────────────────────
+def load_config():
+    try:
+        return json.load(open(CONFIG_FILE, encoding='utf-8'))
+    except Exception:
+        return {}
 
-def svg_icon(svg):
+def save_config(d):
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(d, f, ensure_ascii=False)
+
+# ── SVG Icons ────────────────────────────────────────────────────────
+
+def mk_icon(data):
     px = QPixmap()
-    px.loadFromData(svg.encode())
+    px.loadFromData(data)
     return QIcon(px)
 
 ICO_APP = b'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -78,11 +89,10 @@ ICO_ONLINE = b'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
 ICO_OFFLINE = b'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
 <circle cx="8" cy="8" r="6" fill="#c0392b"/></svg>'''
 
-def mk_icon(data):
-    px = QPixmap()
-    px.loadFromData(data)
-    return QIcon(px)
-
+ICO_THEME = b'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<circle cx="16" cy="16" r="14" fill="#f39c12"/>
+<text x="16" y="22" text-anchor="middle" font-size="14"
+  fill="white" font-family="sans-serif" font-weight="bold">&#9790;</text></svg>'''
 
 # ── Background worker ──────────────────────────────────────────────────
 
@@ -98,6 +108,14 @@ class Worker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+# ── Admin check helper ─────────────────────────────────────────────────
+
+def check_admin():
+    try:
+        r = requests.get(f'{SERVER}/status', timeout=3)
+        return r.ok and r.json().get('status') == 'success'
+    except Exception:
+        return False
 
 # ── Main Window ────────────────────────────────────────────────────────
 
@@ -113,22 +131,29 @@ class MainWindow(QMainWindow):
         self._offline_ips  = []
         self.aliases       = load_aliases()
         self._threads      = []
+        self._dark_mode    = False
+        self._light_palette = QApplication.instance().palette()
 
-        self._build_ui()
-
-        # تحقق من الخادم
-        if not self._server_ok():
+        if not check_admin():
             QMessageBox.critical(
                 self, 'TuxCut Server stopped',
                 'Use "systemctl start tuxcutd" then restart the application')
             sys.exit(1)
 
+        self._build_ui()
         self._load_gw()
         self._load_my(self._gw.get('iface', ''))
         self._update_title()
+
+        cfg = load_config()
+        self._dark_mode = cfg.get('dark_mode', False)
+        if self._dark_mode:
+            self._apply_dark()
+            self.a_theme.setChecked(True)
+
         self.trigger_thread()
 
-    # ── بناء الواجهة ────────────────────────────────────────────────
+    # ── UI ───────────────────────────────────────────────────────────
 
     def _build_ui(self):
         tb = self.addToolBar('Main')
@@ -156,13 +181,20 @@ class MainWindow(QMainWindow):
         self.cb_protection.stateChanged.connect(self.toggle_protection)
         tb.addWidget(self.cb_protection)
 
+        tb.addSeparator()
+
+        self.a_theme = QAction(mk_icon(ICO_THEME), 'Toggle Dark Mode', self)
+        self.a_theme.setToolTip('Toggle Dark Mode')
+        self.a_theme.setCheckable(True)
+        self.a_theme.triggered.connect(self.toggle_theme)
+        tb.addAction(self.a_theme)
+
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding,
                              QSizePolicy.Policy.Preferred)
         tb.addWidget(spacer)
         add_action(ICO_EXIT, 'Exit', self.on_exit)
 
-        # جدول الأجهزة — نفس أعمدة البرنامج الأصلي
         self.hosts_view = QTableWidget(0, 5)
         self.hosts_view.setHorizontalHeaderLabels(
             ['', 'IP Address', 'MAC Address', 'Hostname', 'Alias'])
@@ -180,29 +212,26 @@ class MainWindow(QMainWindow):
         self.hosts_view.setAlternatingRowColors(True)
         self.hosts_view.setShowGrid(False)
         self.hosts_view.setIconSize(QSize(14, 14))
+        self.hosts_view.itemSelectionChanged.connect(self._on_row_selected)
         self.setCentralWidget(self.hosts_view)
         self.statusBar().showMessage('Ready')
 
-    # ── تواصل مع الخادم ──────────────────────────────────────────────
-
-    def _server_ok(self):
-        try:
-            r = requests.get(f'{SERVER}/status', timeout=3)
-            return r.ok and r.json()['status'] == 'success'
-        except Exception:
-            return False
+    # ── Server communication ─────────────────────────────────────────
 
     def _load_gw(self):
-        try:
-            r = requests.get(f'{SERVER}/gw', timeout=10)
-            d = r.json()
-            if d['status'] == 'success':
-                self._gw = d['gw']
-            else:
-                QMessageBox.critical(self, 'Error', d.get('msg', ''))
-                sys.exit(1)
-        except Exception as e:
-            logger.error(e, exc_info=True)
+        for attempt in range(2):
+            try:
+                r = requests.get(f'{SERVER}/gw', timeout=10)
+                d = r.json()
+                if d['status'] == 'success':
+                    self._gw = d['gw']
+                    return
+            except Exception as e:
+                logger.error(e, exc_info=True)
+                if attempt == 0:
+                    logger.info('Retrying gateway fetch...')
+        QMessageBox.critical(self, 'Error', 'No gateway found. Check your network.')
+        sys.exit(1)
 
     def _load_my(self, iface):
         try:
@@ -213,21 +242,24 @@ class MainWindow(QMainWindow):
             logger.error(e, exc_info=True)
 
     def _update_title(self):
+        my_host = self._my.get('hostname', '') or self._my.get('ip', '')
         self.setWindowTitle(
-            f'TuxCut-NG  —  '
-            f'My IP: {self._my.get("ip", "")}  |  '
+            f'TuxCut-NG  —  {my_host}  —  '
             f'GW: {self._gw.get("ip", "")}  [{self._gw.get("iface", "")}]')
 
-    # ── الأزرار ───────────────────────────────────────────────────────
+    # ── Actions ──────────────────────────────────────────────────────
 
     def trigger_thread(self):
         self.statusBar().showMessage('Refreshing hosts list ...')
         ip = self._my.get('ip', self._gw.get('ip', ''))
+        if not ip:
+            self.statusBar().showMessage('Error: no IP to scan')
+            return
         t = Worker(lambda: requests.get(
             f'{SERVER}/scan/{ip}', timeout=60
         ).json()['result']['hosts'])
         t.done.connect(self.fill_hosts_view)
-        t.error.connect(lambda e: self.statusBar().showMessage(f'Error: {e}'))
+        t.error.connect(lambda e: self.statusBar().showMessage(f'Scan Error: {e}'))
         self._run(t)
 
     def on_refresh(self, _=None):
@@ -236,7 +268,7 @@ class MainWindow(QMainWindow):
     def on_cut(self, _=None):
         row = self.hosts_view.currentRow()
         if row < 0:
-            self.statusBar().showMessage('please select a victim to cut')
+            self.statusBar().showMessage('Please select a victim to cut')
             return
         victim = self._row_to_host(row)
         if victim['ip'] in (self._my.get('ip'), self._gw.get('ip')):
@@ -248,20 +280,15 @@ class MainWindow(QMainWindow):
             if r.ok and r.json()['status'] == 'success':
                 if victim['ip'] not in self._offline_ips:
                     self._offline_ips.append(victim['ip'])
-                self.hosts_view.item(row, 0).setIcon(mk_icon(ICO_OFFLINE))
-                for col in range(1, 5):
-                    item = self.hosts_view.item(row, col)
-                    if item:
-                        item.setForeground(QColor('#c0392b'))
-                self.statusBar().showMessage(
-                    f'{victim["ip"]} is now offline')
+                self._set_row_state(row, True)
+                self.statusBar().showMessage(f'{victim["ip"]} is now offline')
         except Exception as e:
             self.statusBar().showMessage(f'Error: {e}')
 
     def on_resume(self, _=None):
         row = self.hosts_view.currentRow()
         if row < 0:
-            self.statusBar().showMessage('please select a victim to resume')
+            self.statusBar().showMessage('Please select a victim to resume')
             return
         victim = self._row_to_host(row)
         self.statusBar().showMessage(f'Resuming {victim["ip"]} ...')
@@ -270,15 +297,22 @@ class MainWindow(QMainWindow):
         def _done(_):
             if victim['ip'] in self._offline_ips:
                 self._offline_ips.remove(victim['ip'])
-            self.hosts_view.item(row, 0).setIcon(mk_icon(ICO_ONLINE))
-            for col in range(1, 5):
-                item = self.hosts_view.item(row, col)
-                if item:
-                    item.setForeground(QColor('#000000'))
+            self._set_row_state(row, False)
             self.statusBar().showMessage(f'{victim["ip"]} is back online')
         t.done.connect(_done)
         t.error.connect(lambda e: self.statusBar().showMessage(f'Error: {e}'))
         self._run(t)
+
+    def _set_row_state(self, row, offline):
+        ico = mk_icon(ICO_OFFLINE) if offline else mk_icon(ICO_ONLINE)
+        fg  = QColor('#c0392b') if offline else QColor('#000000')
+        item0 = self.hosts_view.item(row, 0)
+        if item0:
+            item0.setIcon(ico)
+        for col in range(1, 5):
+            item = self.hosts_view.item(row, col)
+            if item:
+                item.setForeground(fg)
 
     def on_change_mac(self, _=None):
         iface = self._gw.get('iface', '')
@@ -317,7 +351,7 @@ class MainWindow(QMainWindow):
             self.trigger_thread()
 
     def toggle_protection(self, state):
-        if state == Qt.CheckState.Checked.value:
+        if state == Qt.CheckState.Checked:
             self._protect()
         else:
             self._unprotect()
@@ -340,12 +374,52 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(e, exc_info=True)
 
+    def toggle_theme(self):
+        self._dark_mode = not self._dark_mode
+        if self._dark_mode:
+            self._apply_dark()
+        else:
+            QApplication.instance().setPalette(self._light_palette)
+        cfg = load_config()
+        cfg['dark_mode'] = self._dark_mode
+        save_config(cfg)
+
+    def _apply_dark(self):
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
+        palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
+        palette.setColor(QPalette.ColorRole.Base, QColor(35, 35, 35))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
+        palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.black)
+        palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.white)
+        palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
+        palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
+        palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
+        palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
+        palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+        palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
+        palette.setColor(QPalette.ColorRole.Disabled, QPalette.ColorGroup.Disabled,
+                         QPalette.ColorRole.Text, QColor(127, 127, 127))
+        QApplication.instance().setPalette(palette)
+
     def on_exit(self, _=None):
         self._unprotect()
         save_aliases(self.aliases)
         self.close()
 
-    # ── جدول الأجهزة ─────────────────────────────────────────────────
+    # ── Table ────────────────────────────────────────────────────────
+
+    def _on_row_selected(self):
+        row = self.hosts_view.currentRow()
+        if row >= 0:
+            host = self._row_to_host(row)
+            status = 'Offline' if host['ip'] in self._offline_ips else 'Online'
+            hostname = host.get('hostname', '') or '-'
+            self.statusBar().showMessage(
+                f'{host["ip"]} ({hostname}) — {status}')
+        else:
+            self.statusBar().showMessage('Ready')
 
     def fill_hosts_view(self, hosts):
         self.live_hosts = hosts
@@ -387,6 +461,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         self._unprotect()
         save_aliases(self.aliases)
+        for t in self._threads[:]:
+            if t.isRunning():
+                t.quit()
+                t.wait(2000)
         e.accept()
 
 
